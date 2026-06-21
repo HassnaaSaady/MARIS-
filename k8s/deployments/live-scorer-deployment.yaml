@@ -1,0 +1,105 @@
+# live-scorer-deployment.yaml — Maritime Navigation AI System
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# IMPORTANT — replica count:
+#   This service consumes from the "ais_raw" Kafka topic and produces alerts.
+#   Running more than ONE replica will cause DUPLICATE ALERT GENERATION unless:
+#     a) All replicas are in the same Kafka consumer group AND
+#     b) The ais_raw topic has at least N partitions (one per replica) AND
+#     c) Alert deduplication is implemented downstream
+#
+#   Default: replicas: 1 — safe, no duplicates.
+#   To scale: assign replicas to a named consumer group, add partitions to the
+#   topic, and implement alert deduplication in the alerts sink.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# BEFORE DEPLOYMENT — change:
+#   - image: replace REPLACE_WITH_YOUR_IMAGE with the actual live-scorer image
+#     e.g. "ghcr.io/your-org/maritime-live-scorer:latest"
+#   - MODELS_PATH: must point to where model .pkl files are accessible.
+#     Options:
+#       a) Bake the models into the Docker image at build time (simplest)
+#       b) Mount a PVC / shared volume that holds the trained .pkl files
+#       c) Load from MLflow Model Registry at startup
+#
+# Apply: kubectl apply -f k8s/deployments/live-scorer-deployment.yaml -n maritime-system
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: live-scorer
+  namespace: maritime-system
+  labels:
+    app: live-scorer
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: ml-inference
+spec:
+  # Keep at 1 unless Kafka consumer group + topic partitioning is configured.
+  # See note above.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: live-scorer
+  strategy:
+    type: Recreate   # Ensures only one scorer runs at a time during rollout
+
+  template:
+    metadata:
+      labels:
+        app: live-scorer
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: live-scorer
+          # CHANGE: replace with your actual live-scorer image name and tag
+          image: REPLACE_WITH_YOUR_IMAGE/maritime-live-scorer:latest
+          imagePullPolicy: Always
+
+          envFrom:
+            - configMapRef:
+                name: maritime-app-config
+
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-postgres-secret
+                  key: POSTGRES_URL
+            - name: MODELS_PATH
+              value: "/app/models"   # CHANGE if mounting models from a PVC
+
+          # Readiness: the scorer exposes /health on port 8001 (check your image)
+          # CHANGE port if your live-scorer uses a different health endpoint
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 40
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          resources:
+            requests:
+              # Scorer loads ML models into memory at startup — allocate enough RAM
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              # CHANGE: IsolationForest + RandomForest + 3×XGBoost ≈ 1–2 GB depending on size
+              cpu: "1000m"
+              memory: "2Gi"

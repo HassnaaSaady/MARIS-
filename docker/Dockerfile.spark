@@ -1,0 +1,10 @@
+FROM apache/spark:3.4.4-python3
+USER root
+RUN pip install --no-cache-dir "delta-spark==2.4.0" "pandas>=2.0.3" "pyarrow>=14.0.0" "psycopg2-binary==2.9.9" "sqlalchemy==2.0.31"
+ENV SPARK_PACKAGES="org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4,io.delta:delta-core_2.12:2.4.0"
+RUN /opt/spark/bin/spark-submit --packages ${SPARK_PACKAGES} \
+    --class org.apache.spark.deploy.SparkSubmit \
+    /opt/spark/examples/jars/spark-examples_2.12-3.4.4.jar 2>/dev/null || true
+WORKDIR /opt/spark/app
+ENV PYTHONPATH=/opt/spark/app/src
+CMD ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]

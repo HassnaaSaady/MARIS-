@@ -1,0 +1,121 @@
+# postgres-deployment.yaml — Maritime Navigation AI System
+# PostgreSQL 15 as a StatefulSet with a PersistentVolumeClaim.
+#
+# Why StatefulSet (not Deployment)?
+#   PostgreSQL requires stable network identity and stable storage.
+#   A Deployment can reschedule the pod to a different node and lose the PVC
+#   binding; a StatefulSet guarantees the same PVC is reattached.
+#
+# BEFORE DEPLOYMENT — review and change:
+#   - storageClassName: set to your cluster's storage class
+#     (e.g. "gp2" on AWS EKS, "standard" on GKE, "managed-premium" on AKS)
+#   - storage: 20Gi — size to your expected data volume
+#   - resources: adjust cpu/memory to your node size
+#   - For production: use a managed database (AWS RDS, Cloud SQL, Azure DB)
+#     instead of running PostgreSQL in Kubernetes. See docs/PRODUCTION_RECOMMENDATIONS.md
+#
+# Apply: kubectl apply -f k8s/deployments/postgres-deployment.yaml -n maritime-system
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: maritime-system
+  labels:
+    app: postgres
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: database
+spec:
+  serviceName: "postgres-service"
+  replicas: 1   # Do NOT scale PostgreSQL horizontally without read-replica setup
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: maritime-app-config
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: maritime-app-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-postgres-secret
+                  key: POSTGRES_PASSWORD
+            # Store data on the persistent volume, not the ephemeral overlay
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+
+          # Readiness: only accept traffic when PostgreSQL accepts connections
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB)"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Liveness: restart the container if PostgreSQL stops responding
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB)"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          resources:
+            requests:
+              # CHANGE: size requests to your actual workload
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              # CHANGE: adjust limits based on your node capacity
+              cpu: "1000m"
+              memory: "2Gi"
+
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # CHANGE: set storageClassName to match your cluster
+        # Examples:
+        #   AWS EKS:   storageClassName: "gp2"  or  "gp3"
+        #   GKE:       storageClassName: "standard"  or  "premium-rwo"
+        #   AKS:       storageClassName: "managed-premium"
+        #   Minikube:  storageClassName: "standard"  (default)
+        # storageClassName: "REPLACE_WITH_YOUR_STORAGE_CLASS"
+        resources:
+          requests:
+            # CHANGE: size to your expected data volume (AIS data grows quickly)
+            storage: 20Gi

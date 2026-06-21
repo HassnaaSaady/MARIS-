@@ -1,0 +1,12 @@
+FROM python:3.10-slim-bookworm
+WORKDIR /app
+RUN pip install --no-cache-dir --timeout=120 --retries=5 pandas==2.2.2
+RUN pip install --no-cache-dir --timeout=120 --retries=5 pyarrow==16.1.0
+RUN pip install --no-cache-dir --timeout=120 --retries=5 kafka-python==2.0.2
+RUN pip install --no-cache-dir --timeout=120 --retries=5 scikit-learn==1.5.1
+RUN pip install --no-cache-dir --timeout=120 --retries=5 joblib==1.4.2
+RUN pip install --no-cache-dir --timeout=120 --retries=5 psycopg2-binary==2.9.9
+RUN pip install --no-cache-dir --timeout=120 --retries=5 sqlalchemy==2.0.31
+RUN pip install --no-cache-dir --timeout=120 --retries=5 xgboost==2.0.3
+ENV PYTHONPATH=/app/src
+CMD ["tail", "-f", "/dev/null"]

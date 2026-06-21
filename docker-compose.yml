@@ -1,0 +1,401 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Maritime Navigation AI System  |  Full Stack docker-compose
+#  Optimised for: Intel i7-14700, 32GB RAM, Windows 11
+#  All source files are in src/ subfolders
+# ═══════════════════════════════════════════════════════════════════════════════
+
+x-spark-common: &spark-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.spark
+  volumes:
+    - ./src:/opt/spark/app/src
+    - ./data:/opt/spark/app/data
+    - ./models:/opt/spark/app/models
+    - delta_data:/delta
+    - ivy_cache:/root/.ivy2
+  environment:
+    SPARK_MASTER:             spark://spark-master:7077
+    DELTA_ROOT:               /delta
+    PYTHONPATH:               /opt/spark/app/src
+    KAFKA_BOOTSTRAP_SERVERS:  kafka:9092
+    POSTGRES_HOST:            postgres
+    POSTGRES_DB:              maritime
+    POSTGRES_USER:            maritime
+    POSTGRES_PASSWORD:        maritime123
+    PARQUET_DATA_PATH:        /opt/spark/app/data/parquet
+    MODELS_PATH:              /opt/spark/app/models
+  working_dir: /opt/spark/app/src
+
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_HEAP_OPTS: "-Xmx1G -Xms512M"
+    deploy:
+      resources:
+        limits:
+          memory: 1500m
+          cpus: '2.0'
+    healthcheck:
+      test: ["CMD", "bash", "-c", "kafka-topics --bootstrap-server localhost:9092 --list 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      start_period: 60s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8083:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: maritime-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB:       maritime
+      POSTGRES_USER:     maritime
+      POSTGRES_PASSWORD: maritime123
+    command: >
+      postgres
+        -c shared_buffers=512MB
+        -c effective_cache_size=2GB
+        -c maintenance_work_mem=256MB
+        -c max_connections=200
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "maritime"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── Spark Cluster (2 workers for 32GB machine) ────────────────────────────────
+  spark-master:
+    <<: *spark-common
+    container_name: spark-master
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+      --host spark-master --port 7077 --webui-port 8080
+    ports:
+      - "9090:8080"
+      - "7077:7077"
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  spark-worker-1:
+    <<: *spark-common
+    container_name: spark-worker-1
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+    ports:
+      - "9091:8081"
+    environment:
+      SPARK_MASTER:            spark://spark-master:7077
+      DELTA_ROOT:              /delta
+      PYTHONPATH:              /opt/spark/app/src
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPARK_WORKER_CORES:      4
+      SPARK_WORKER_MEMORY:     4g
+    deploy:
+      resources:
+        limits:
+          memory: 5g
+          cpus: '4.0'
+
+  spark-worker-2:
+    <<: *spark-common
+    container_name: spark-worker-2
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+    ports:
+      - "9093:8081"
+    environment:
+      SPARK_MASTER:            spark://spark-master:7077
+      DELTA_ROOT:              /delta
+      PYTHONPATH:              /opt/spark/app/src
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPARK_WORKER_CORES:      4
+      SPARK_WORKER_MEMORY:     4g
+    deploy:
+      resources:
+        limits:
+          memory: 5g
+          cpus: '4.0'
+
+  spark-stream:
+    <<: *spark-common
+    container_name: spark-stream
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+    command: >
+      /opt/spark/bin/spark-submit
+        --master spark://spark-master:7077
+        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.4,io.delta:delta-core_2.12:2.4.0
+        --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension
+        --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+        --conf spark.sql.shuffle.partitions=8
+        --conf spark.driver.memory=2g
+        --conf spark.executor.memory=4g
+        --conf spark.executor.cores=4
+        --num-executors=2
+        /opt/spark/app/src/processing/spark_streaming_consumer.py
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+          cpus: '4.0'
+
+  # ── Application Services ──────────────────────────────────────────────────────
+  producer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.producer
+    container_name: ais-producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+        - ./src:/app/src
+        - ./data:/app/data
+        - ./models:/app/models
+        - delta_data:/delta
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      AIS_TOPIC:               ais_raw
+      PARQUET_DATA_PATH:       /app/data/parquet
+      RAW_DATA_PATH:           /app/data/raw
+      STREAM_DELAY_SECONDS:    "0.002"
+      LOOP:                    "true"
+      MODELS_PATH:             /app/models
+      PYTHONPATH:              /app/src
+      DELTA_ROOT:              /delta
+      POSTGRES_HOST:           postgres
+      POSTGRES_DB:             maritime
+      POSTGRES_USER:           maritime
+      POSTGRES_PASSWORD:       maritime123
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+    restart: unless-stopped
+    command: >
+      bash -c "while true; do
+        python src/producer/kafka_producer.py;
+        echo 'Producer crashed, restarting in 5s...';
+        sleep 5;
+      done"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: maritime-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./api:/app/api
+      - ./models:/app/models
+    environment:
+      POSTGRES_HOST:           postgres
+      POSTGRES_DB:             maritime
+      POSTGRES_USER:           maritime
+      POSTGRES_PASSWORD:       maritime123
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MODELS_PATH:             /app/models
+      PYTHONPATH:              /app/src:/app/api
+    command: >
+      uvicorn api.main:app
+        --host 0.0.0.0
+        --port 8000
+        --reload
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '2.0'
+    restart: unless-stopped
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.streamlit
+    container_name: streamlit-dashboard
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./models:/app/models
+      - delta_data:/delta
+    environment:
+      KAFKA_BOOTSTRAP:         kafka:9092
+      AIS_TOPIC:               ais_raw
+      POSTGRES_HOST:           postgres
+      POSTGRES_DB:             maritime
+      POSTGRES_USER:           maritime
+      POSTGRES_PASSWORD:       maritime123
+      MODELS_PATH:             /app/models
+      DELTA_ROOT:              /delta
+      PYTHONPATH:              /app/src
+    command: >
+      streamlit run /app/src/dashboard/streamlit_app.py
+        --server.address=0.0.0.0
+        --server.port=8501
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+    restart: unless-stopped
+
+  live-scorer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.producer
+    container_name: live-scorer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./api:/app/api
+      - ./models:/app/models
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      AIS_TOPIC:               ais_raw
+      POSTGRES_HOST:           postgres
+      POSTGRES_DB:             maritime
+      POSTGRES_USER:           maritime
+      POSTGRES_PASSWORD:       maritime123
+      MODELS_PATH:             /app/models
+      PYTHONPATH:              /app/src:/app/api
+      SCORER_BATCH_SIZE:       "200"
+      SCORER_BATCH_WINDOW:     "5.0"
+    command: python -m ml.live_scorer
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '2.0'
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: maritime-frontend
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      REACT_APP_WS_URL:  ws://localhost:8000/ws/vessels
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '2.0'
+    restart: unless-stopped
+
+
+volumes:
+  delta_data:
+  ivy_cache:
+  postgres_data:

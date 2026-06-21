@@ -1,0 +1,98 @@
+# fastapi-deployment.yaml — Maritime Navigation AI System
+# FastAPI backend — 2 replicas, stateless, safe to scale horizontally.
+#
+# BEFORE DEPLOYMENT — change:
+#   - image: replace REPLACE_WITH_YOUR_IMAGE with the actual image
+#     e.g. "ghcr.io/your-org/maritime-api:latest"
+#     or   "your-ecr-account.dkr.ecr.us-east-1.amazonaws.com/maritime-api:v1.0"
+#   - resources: size to your node capacity
+#   - MODELS_PATH volume: mount a shared volume or bake models into the image
+#
+# Apply: kubectl apply -f k8s/deployments/fastapi-deployment.yaml -n maritime-system
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi
+  namespace: maritime-system
+  labels:
+    app: fastapi
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fastapi
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # Zero-downtime rollout
+
+  template:
+    metadata:
+      labels:
+        app: fastapi
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: fastapi
+          # CHANGE: replace with your actual image name and tag
+          image: REPLACE_WITH_YOUR_IMAGE/maritime-api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: maritime-app-config
+
+          env:
+            # Inject the PostgreSQL password from the Secret
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-postgres-secret
+                  key: POSTGRES_URL
+            # Snowflake (optional — pod starts fine if these are empty)
+            - name: SNOWFLAKE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-snowflake-secret
+                  key: SNOWFLAKE_PASSWORD
+                  optional: true
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          resources:
+            requests:
+              # CHANGE: size to your expected request rate
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"

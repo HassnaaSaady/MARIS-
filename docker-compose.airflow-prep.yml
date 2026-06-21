@@ -1,0 +1,28 @@
+# docker-compose.airflow-prep.yml — Maritime Navigation AI System
+#
+# Additive override: mounts ./mlops into the ais-producer container so the
+# Airflow DAG's `evaluate_models` task can reach
+# /app/mlops/model_registry/evaluate_models.py and
+# /app/mlops/configs/mlflow_config.py inside that container.
+#
+# This file does NOT modify docker-compose.yml — it is merged on top via
+# Docker Compose's override mechanism.
+#
+# ── ONE-TIME SETUP (or after `docker compose down` recreates the container) ───
+#
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.airflow-prep.yml \
+#                  up -d producer
+#
+# Subsequent `docker compose up -d` (without -f) uses docker-compose.yml only
+# and will NOT include this override.  Re-run the command above whenever the
+# producer container is recreated.
+#
+# ── Verify the mount worked ───────────────────────────────────────────────────
+#   docker exec ais-producer ls /app/mlops/model_registry/
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  producer:
+    volumes:
+      - ./mlops:/app/mlops

@@ -1,0 +1,220 @@
+# kafka-deployment.yaml — Maritime Navigation AI System
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PRODUCTION RECOMMENDATION:
+#   For production use, prefer a managed or operator-based Kafka deployment:
+#     - Strimzi Kafka Operator  (https://strimzi.io)         ← recommended
+#     - Confluent Operator      (https://docs.confluent.io)
+#     - AWS MSK, Azure Event Hubs (Kafka-compatible), GCP Pub/Sub (Kafka API)
+#
+#   Running Kafka + Zookeeper as plain StatefulSets is acceptable for
+#   development/staging but requires manual management of broker IDs,
+#   log retention, topic creation, and rolling upgrades in production.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# BEFORE DEPLOYMENT — review and change:
+#   - storageClassName (both Zookeeper and Kafka PVCs)
+#   - KAFKA_ADVERTISED_LISTENERS: replace "kafka-service" with your external
+#     hostname if clients outside the cluster need to connect
+#   - resources: size to your message throughput
+#
+# Apply: kubectl apply -f k8s/deployments/kafka-deployment.yaml -n maritime-system
+
+# ── Zookeeper StatefulSet ──────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zookeeper
+  namespace: maritime-system
+  labels:
+    app: zookeeper
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: messaging
+spec:
+  serviceName: "zookeeper-service"
+  replicas: 1   # Scale to 3 for production quorum; requires odd number
+  selector:
+    matchLabels:
+      app: zookeeper
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: zookeeper
+          image: confluentinc/cp-zookeeper:7.4.0
+          ports:
+            - name: client
+              containerPort: 2181
+            - name: peer
+              containerPort: 2888
+            - name: election
+              containerPort: 3888
+
+          env:
+            - name: ZOOKEEPER_CLIENT_PORT
+              value: "2181"
+            - name: ZOOKEEPER_TICK_TIME
+              value: "2000"
+            - name: ZOOKEEPER_SYNC_LIMIT
+              value: "2"
+            - name: ZOOKEEPER_DATA_DIR
+              value: /var/lib/zookeeper/data
+            - name: ZOOKEEPER_LOG_DIR
+              value: /var/lib/zookeeper/log
+
+          volumeMounts:
+            - name: zookeeper-data
+              mountPath: /var/lib/zookeeper
+
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "echo ruok | nc localhost 2181 | grep imok"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "echo ruok | nc localhost 2181 | grep imok"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+  volumeClaimTemplates:
+    - metadata:
+        name: zookeeper-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # CHANGE: set storageClassName to match your cluster
+        # storageClassName: "REPLACE_WITH_YOUR_STORAGE_CLASS"
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+
+# ── Kafka StatefulSet ──────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: maritime-system
+  labels:
+    app: kafka
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: messaging
+spec:
+  serviceName: "kafka-service"
+  replicas: 1   # Scale to 3 for production fault tolerance; requires topic replication
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.4.0
+          ports:
+            - name: kafka
+              containerPort: 9092
+            - name: kafka-internal
+              containerPort: 29092
+
+          env:
+            - name: KAFKA_BROKER_ID
+              value: "1"
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              valueFrom:
+                configMapKeyRef:
+                  name: maritime-app-config
+                  key: ZOOKEEPER_CONNECT
+            # CHANGE: replace "kafka-service" with your actual external hostname
+            # when clients outside the cluster need to produce/consume.
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka-service:9092,PLAINTEXT_INTERNAL://kafka:29092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT_INTERNAL"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"   # CHANGE to 3 when replicas: 3
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"   # CHANGE to 3 when replicas: 3
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"   # CHANGE to 2 when replicas: 3
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+            - name: KAFKA_LOG_DIRS
+              value: /var/lib/kafka/data
+
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "kafka-broker-api-versions --bootstrap-server localhost:9092"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "kafka-broker-api-versions --bootstrap-server localhost:9092"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+
+          resources:
+            requests:
+              # CHANGE: Kafka needs significant memory for the page cache
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # CHANGE: set storageClassName to match your cluster
+        # storageClassName: "REPLACE_WITH_YOUR_STORAGE_CLASS"
+        resources:
+          requests:
+            # CHANGE: AIS raw topic retention will drive disk usage; size accordingly
+            storage: 50Gi

@@ -1,0 +1,23 @@
+FROM python:3.11-slim-bookworm
+WORKDIR /app
+RUN pip install --no-cache-dir --timeout=120 --retries=5 streamlit==1.36.0
+RUN pip install --no-cache-dir --timeout=120 --retries=5 streamlit-autorefresh==1.0.1
+RUN pip install --no-cache-dir --timeout=120 --retries=5 pandas==2.2.2
+RUN pip install --no-cache-dir --timeout=120 --retries=5 pyarrow==16.1.0
+RUN pip install --no-cache-dir --timeout=120 --retries=5 "plotly>=5.22.0"
+RUN pip install --no-cache-dir --timeout=120 --retries=5 kafka-python==2.0.2
+RUN pip install --no-cache-dir --timeout=120 --retries=5 psycopg2-binary==2.9.9
+RUN pip install --no-cache-dir --timeout=120 --retries=5 sqlalchemy==2.0.31
+RUN pip install --no-cache-dir --timeout=120 --retries=5 scikit-learn==1.5.1
+RUN pip install --no-cache-dir --timeout=120 --retries=5 joblib==1.4.2
+RUN pip install --no-cache-dir xgboost==2.0.3
+RUN mkdir -p /root/.streamlit && cat > /root/.streamlit/config.toml <<'EOF'
+[server]
+headless = true
+enableCORS = false
+[browser]
+gatherUsageStats = false
+EOF
+ENV PYTHONPATH=/app/src
+EXPOSE 8501
+CMD ["streamlit", "run", "/app/src/dashboard/streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]

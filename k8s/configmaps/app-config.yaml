@@ -1,0 +1,62 @@
+# app-config.yaml — Maritime Navigation AI System
+# Non-secret environment variables shared across services.
+#
+# DO NOT put passwords, tokens, or private keys here.
+# Those belong in k8s/secrets/secrets-template.yaml (as Kubernetes Secrets).
+#
+# Apply: kubectl apply -f k8s/configmaps/app-config.yaml -n maritime-system
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maritime-app-config
+  namespace: maritime-system
+  labels:
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: configuration
+data:
+  # ── Service ports ──────────────────────────────────────────────────────────
+  FASTAPI_PORT: "8000"
+  FRONTEND_PORT: "3000"
+  STREAMLIT_PORT: "8501"
+
+  # ── PostgreSQL (non-secret) ────────────────────────────────────────────────
+  # Password is in the Secret; only host/port/db go here.
+  POSTGRES_HOST: "postgres-service"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "maritime"
+  POSTGRES_USER: "maritime"
+
+  # ── Kafka ──────────────────────────────────────────────────────────────────
+  # Inside the cluster, services use the ClusterIP service name.
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-service:9092"
+  KAFKA_TOPIC_RAW: "ais_raw"
+  KAFKA_TOPIC_ALERTS: "ais_alerts"
+
+  # ── Zookeeper ──────────────────────────────────────────────────────────────
+  ZOOKEEPER_CONNECT: "zookeeper-service:2181"
+
+  # ── API behaviour ─────────────────────────────────────────────────────────
+  API_HOST: "0.0.0.0"
+  LOG_LEVEL: "info"
+
+  # ── Streamlit ─────────────────────────────────────────────────────────────
+  STREAMLIT_SERVER_PORT: "8501"
+  STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
+  # Disable the "Deploy" button — not needed when running inside K8s
+  STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION: "true"
+
+  # ── Geographic scope (US coastal waters) ──────────────────────────────────
+  US_LAT_MIN: "24"
+  US_LAT_MAX: "49"
+  US_LON_MIN: "-125"
+  US_LON_MAX: "-66"
+
+  # ── ML model paths ────────────────────────────────────────────────────────
+  # Must match the path where models are mounted inside the container.
+  # CHANGE THIS if you mount models differently.
+  MODELS_PATH: "/app/models"
+
+  # ── MLflow (optional) ─────────────────────────────────────────────────────
+  # Uncomment and set if you run a remote MLflow tracking server.
+  # MLFLOW_TRACKING_URI: "http://mlflow-service:5000"

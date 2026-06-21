@@ -1,0 +1,216 @@
+# services.yaml — Maritime Navigation AI System
+# Kubernetes Services for all workloads.
+#
+# Service types used:
+#   ClusterIP     — internal-only, reachable within the cluster namespace
+#   LoadBalancer  — requests a cloud load balancer (GKE, EKS, AKS)
+#               or external IP from MetalLB (bare-metal / on-prem)
+#   NodePort      — exposes service on every node's IP at a static port;
+#               useful for Minikube local testing
+#
+# Minikube note:
+#   LoadBalancer services stay in <pending> state on Minikube because there
+#   is no cloud provider to allocate an IP. Use one of:
+#     minikube tunnel                 ← allocates a local IP for LoadBalancer
+#     minikube service <name> --url   ← opens a tunnel and prints the URL
+#   Or change the type to NodePort for local testing.
+#
+# Apply: kubectl apply -f k8s/services/services.yaml -n maritime-system
+
+# ── PostgreSQL ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: maritime-system
+  labels:
+    app: postgres
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP   # Database should never be exposed outside the cluster
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+
+---
+
+# ── Zookeeper ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-service
+  namespace: maritime-system
+  labels:
+    app: zookeeper
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: messaging
+spec:
+  type: ClusterIP
+  selector:
+    app: zookeeper
+  ports:
+    - name: client
+      port: 2181
+      targetPort: 2181
+    - name: peer
+      port: 2888
+      targetPort: 2888
+    - name: election
+      port: 3888
+      targetPort: 3888
+
+---
+
+# ── Kafka ──────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-service
+  namespace: maritime-system
+  labels:
+    app: kafka
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: messaging
+spec:
+  type: ClusterIP   # Brokers are consumed by internal services only
+  selector:
+    app: kafka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: 9092
+    - name: kafka-internal
+      port: 29092
+      targetPort: 29092
+
+---
+
+# ── FastAPI (ClusterIP — internal) ────────────────────────────────────────────
+# Internal service used by Streamlit and live-scorer to reach the API.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-service
+  namespace: maritime-system
+  labels:
+    app: fastapi
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app: fastapi
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+
+---
+
+# ── FastAPI (LoadBalancer — external) ─────────────────────────────────────────
+# Exposes the API externally for browser clients and external integrations.
+#
+# Cloud: the cloud provider assigns an external IP automatically.
+# Minikube: run `minikube tunnel` to get a local IP, or change type to NodePort.
+#
+# If you use an Ingress controller instead, delete this service and add an
+# Ingress rule for /api/* → fastapi-service:8000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-external
+  namespace: maritime-system
+  labels:
+    app: fastapi
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: api
+  annotations:
+    # CHANGE: cloud-specific annotations go here, e.g.:
+    # service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    # cloud.google.com/load-balancer-type: "External"
+spec:
+  # CHANGE: use NodePort on Minikube or bare-metal without MetalLB
+  type: LoadBalancer
+  selector:
+    app: fastapi
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      # CHANGE: nodePort is optional; Kubernetes assigns one from 30000-32767
+      # nodePort: 30800
+
+---
+
+# ── React Frontend (LoadBalancer) ─────────────────────────────────────────────
+# The React app is a static SPA served by nginx; exposes on port 80 externally.
+#
+# Minikube: run `minikube tunnel` or use NodePort + `minikube service`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: maritime-system
+  labels:
+    app: frontend
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: frontend
+spec:
+  # CHANGE: use NodePort on Minikube or bare-metal without MetalLB
+  type: LoadBalancer
+  selector:
+    app: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+
+---
+
+# ── Streamlit Dashboard (ClusterIP) ───────────────────────────────────────────
+# Expose via an Ingress rule or port-forward for internal use.
+# Change to LoadBalancer/NodePort if you need direct external access.
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit-service
+  namespace: maritime-system
+  labels:
+    app: streamlit
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app: streamlit
+  ports:
+    - name: http
+      port: 8501
+      targetPort: 8501
+
+---
+
+# ── Live Scorer (ClusterIP) ───────────────────────────────────────────────────
+# Internal only — the scorer reads from Kafka and writes to PostgreSQL.
+# No external access needed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: live-scorer-service
+  namespace: maritime-system
+  labels:
+    app: live-scorer
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: ml-inference
+spec:
+  type: ClusterIP
+  selector:
+    app: live-scorer
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001

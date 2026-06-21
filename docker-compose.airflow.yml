@@ -1,0 +1,89 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Maritime Navigation AI System  |  Airflow Standalone Orchestration
+#
+#  ONE container. No Celery, no Redis, no extra Postgres.
+#  SQLite metadata DB keeps the container count at +1 over the main stack.
+#  Resource budget: ~4 GB RAM, 1 vCPU.
+#
+#  ── CRITICAL: free up headroom FIRST ──────────────────────────────────────────
+#  Stop heavy containers before starting Airflow (machine limit ~12 containers):
+#
+#    docker compose stop spark-worker-1 spark-worker-2 live-scorer
+#    docker stop airflow-postgres-1 airflow-redis-1   # legacy Celery artefacts
+#
+#  ── Start / stop Airflow ──────────────────────────────────────────────────────
+#    docker compose -f docker-compose.airflow.yml up -d
+#    docker compose -f docker-compose.airflow.yml down
+#
+#  ── Get admin password (printed on first start) ───────────────────────────────
+#    docker exec maritime-airflow cat /opt/airflow/standalone_admin_password.txt
+#
+#  ── Open UI ───────────────────────────────────────────────────────────────────
+#    http://localhost:8080  (username: admin)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  airflow:
+    image: apache/airflow:2.9.3
+    container_name: maritime-airflow
+
+    # Root is required to read /var/run/docker.sock.
+    # Airflow standalone is safe to run as root in a local dev environment.
+    user: root
+
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+
+      # ── Executor: Sequential (single-container, zero extra deps) ────────────
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+
+      # ── SQLite metadata DB (no Postgres needed) ──────────────────────────────
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "sqlite:////opt/airflow/airflow.db"
+
+      # ── UI / security ────────────────────────────────────────────────────────
+      AIRFLOW__WEBSERVER__SECRET_KEY: "maritime-airflow-secret-change-in-prod"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+      AIRFLOW__WEBSERVER__BASE_URL: "http://localhost:8080"
+      AIRFLOW__WEBSERVER__WORKERS: "2"
+      AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: "300"
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "300"
+
+      # ── DAG discovery ────────────────────────────────────────────────────────
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+
+      # ── Scheduler tuning (reduce CPU/disk pressure) ──────────────────────────
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "60"
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "120"
+
+      # ── Logging ──────────────────────────────────────────────────────────────
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
+      AIRFLOW__LOGGING__LOG_LEVEL: WARNING
+
+      # ── Docker socket (used by PythonOperators via docker-py SDK) ──────────
+      DOCKER_HOST: "unix:///var/run/docker.sock"
+
+    volumes:
+      # DAG files — edit on host, Airflow picks them up automatically
+      - ./airflow/dags:/opt/airflow/dags
+
+      # Task logs — persist across container restarts
+      - ./airflow/logs:/opt/airflow/logs
+
+      # Docker socket — gives BashOperators access to `docker exec`
+      # against the main maritime stack containers
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    ports:
+      - "8080:8080"
+
+    command: airflow standalone
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+          cpus: "1.0"

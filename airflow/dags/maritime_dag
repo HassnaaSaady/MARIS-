@@ -1,0 +1,18 @@
+digraph maritime_ais_pipeline {
+	graph [label=maritime_ais_pipeline labelloc=t rankdir=LR]
+	bronze_job [color="#000000" fillcolor="#f0ede4" label=bronze_job shape=rectangle style="filled,rounded"]
+	evaluate_models [color="#000000" fillcolor="#f0ede4" label=evaluate_models shape=rectangle style="filled,rounded"]
+	gold_job [color="#000000" fillcolor="#f0ede4" label=gold_job shape=rectangle style="filled,rounded"]
+	silver_job [color="#000000" fillcolor="#f0ede4" label=silver_job shape=rectangle style="filled,rounded"]
+	train_anomaly [color="#000000" fillcolor="#f0ede4" label=train_anomaly shape=rectangle style="filled,rounded"]
+	train_congestion [color="#000000" fillcolor="#f0ede4" label=train_congestion shape=rectangle style="filled,rounded"]
+	train_predictor [color="#000000" fillcolor="#f0ede4" label=train_predictor shape=rectangle style="filled,rounded"]
+	bronze_job -> silver_job
+	gold_job -> train_anomaly
+	gold_job -> train_congestion
+	gold_job -> train_predictor
+	silver_job -> gold_job
+	train_anomaly -> evaluate_models
+	train_congestion -> evaluate_models
+	train_predictor -> evaluate_models
+}

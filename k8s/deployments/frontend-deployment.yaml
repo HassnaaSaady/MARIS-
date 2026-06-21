@@ -1,0 +1,80 @@
+# frontend-deployment.yaml — Maritime Navigation AI System
+# React frontend — 2 replicas, stateless, safe to scale horizontally.
+#
+# BEFORE DEPLOYMENT — change:
+#   - image: replace REPLACE_WITH_YOUR_IMAGE with the actual built React image
+#     e.g. "ghcr.io/your-org/maritime-frontend:latest"
+#   - REACT_APP_API_URL: set to the external hostname or LoadBalancer IP
+#     of the FastAPI service so the browser can reach the API
+#
+# Apply: kubectl apply -f k8s/deployments/frontend-deployment.yaml -n maritime-system
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: maritime-system
+  labels:
+    app: frontend
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      terminationGracePeriodSeconds: 15
+
+      containers:
+        - name: frontend
+          # CHANGE: replace with your actual React image name and tag
+          image: REPLACE_WITH_YOUR_IMAGE/maritime-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+
+          env:
+            # CHANGE: set to the public hostname or LoadBalancer IP of the API
+            # so the browser-side JavaScript can reach FastAPI.
+            - name: REACT_APP_API_URL
+              value: "http://REPLACE_WITH_YOUR_API_HOSTNAME:8000"
+            - name: PORT
+              value: "3000"
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

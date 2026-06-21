@@ -1,0 +1,93 @@
+# docker-compose.mlflow.yml — Maritime Navigation AI System
+# Optional MLflow tracking server.
+#
+# HOW TO USE (do NOT modify docker-compose.yml):
+#   docker compose \
+#       -f docker-compose.yml \
+#       -f docker/docker-compose.mlflow.yml \
+#       up -d mlflow
+#
+# This override adds ONE new service (mlflow) and ONE new volume
+# (mlflow_artifacts).  It does not change any existing service.
+#
+# The mlflow service reuses the existing `postgres` container as its
+# backend store so experiment metadata is durable across restarts.
+# Artifact binaries are stored in the mlflow_artifacts volume.
+#
+# After starting, point your training scripts at the server:
+#   export MLFLOW_TRACKING_URI=http://localhost:5000
+#   python mlops/experiments/train_anomaly_mlflow.py
+#
+# Open the UI: http://localhost:5000
+
+services:
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.15.0
+    container_name: maritime_mlflow
+    ports:
+      - "5000:5000"
+    # Depends on postgres being healthy before starting so the DB migration
+    # runs successfully on first boot.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Backend store: reuse the existing PostgreSQL service.
+      # mlflow creates its own schema (public.experiments, public.runs …)
+      # alongside the maritime star-schema tables — no conflict.
+      MLFLOW_BACKEND_STORE_URI: postgresql://maritime:maritime123@postgres:5432/maritime
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+      # Expose the server on all interfaces inside the container
+      MLFLOW_HOST: 0.0.0.0
+      MLFLOW_PORT: "5000"
+      # Workers — 1 is enough for a dev/staging tracking server
+      MLFLOW_WORKERS: "1"
+    volumes:
+      # Persistent artifact storage (model binaries, plots, CSVs)
+      - mlflow_artifacts:/mlflow/artifacts
+      # Mount mlops/artifacts so plots generated locally are also
+      # accessible to the MLflow server for display in the UI
+      - ./mlops/artifacts:/mlops/artifacts:ro
+    networks:
+      - default
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://maritime:maritime123@postgres:5432/maritime
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+      --workers 1
+    restart: unless-stopped
+    # Health-check: the /health endpoint returns 200 when server is ready
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ---------------------------------------------------------------------------
+  # Patch: ensure postgres advertises a health-check so mlflow can
+  # use `depends_on: condition: service_healthy`.
+  # This block extends the existing postgres service without replacing it.
+  # ---------------------------------------------------------------------------
+  postgres:
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maritime -d maritime"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+
+volumes:
+  mlflow_artifacts:
+    driver: local
+    # Named volume — survives container restarts and `docker compose down`
+    # Use `docker compose down -v` to also remove artifact storage.

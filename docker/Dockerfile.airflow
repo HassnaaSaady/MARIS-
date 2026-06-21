@@ -1,0 +1,20 @@
+# Dockerfile.airflow — Maritime Navigation AI System
+#
+# Extends official Airflow with the Docker CLI so BashOperators can run
+# `docker exec` against the main maritime stack via the bind-mounted socket.
+# The Docker *daemon* is NOT included — only the client binary is added.
+#
+# Built by docker-compose.airflow.yml; not part of the main docker-compose.yml.
+
+FROM apache/airflow:2.9.3
+
+USER root
+
+# docker.io provides the CLI only (no daemon, no containerd pulled in).
+RUN apt-get update -qq \
+    && apt-get install -y -q --no-install-recommends docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Restore the Airflow default user; docker-compose.airflow.yml overrides
+# at runtime with `user: root` so the Docker socket is accessible.
+USER airflow

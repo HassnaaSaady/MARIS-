@@ -1,0 +1,14 @@
+# namespace.yaml — Maritime Navigation AI System
+# Isolates all maritime AIS resources in their own Kubernetes namespace.
+#
+# Apply: kubectl apply -f k8s/namespace.yaml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maritime-system
+  labels:
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    description: "Maritime AIS Navigation AI System — all workloads run in this namespace"

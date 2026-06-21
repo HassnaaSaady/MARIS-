@@ -1,0 +1,97 @@
+# streamlit-deployment.yaml — Maritime Navigation AI System
+# Streamlit analytics dashboard — single replica (stateful session state).
+#
+# Note on replicas:
+#   Streamlit session state is stored in-process, not in a shared cache.
+#   Running > 1 replica causes users to lose state when the load balancer
+#   routes them to a different pod. Use replicas: 1 unless you add
+#   sticky sessions (sessionAffinity: ClientIP) to the Service.
+#
+# BEFORE DEPLOYMENT — change:
+#   - image: replace REPLACE_WITH_YOUR_IMAGE with the actual Streamlit image
+#     e.g. "ghcr.io/your-org/maritime-streamlit:latest"
+#   - resources: Streamlit holds DataFrames in memory; size accordingly
+#
+# Apply: kubectl apply -f k8s/deployments/streamlit-deployment.yaml -n maritime-system
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit
+  namespace: maritime-system
+  labels:
+    app: streamlit
+    app.kubernetes.io/name: maritime-navigation-ai
+    app.kubernetes.io/component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamlit
+  strategy:
+    type: Recreate   # Simplest for single-replica stateful dashboards
+
+  template:
+    metadata:
+      labels:
+        app: streamlit
+    spec:
+      terminationGracePeriodSeconds: 15
+
+      containers:
+        - name: streamlit
+          # CHANGE: replace with your actual Streamlit image name and tag
+          image: REPLACE_WITH_YOUR_IMAGE/maritime-streamlit:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8501
+
+          envFrom:
+            - configMapRef:
+                name: maritime-app-config
+
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-postgres-secret
+                  key: POSTGRES_URL
+            - name: SNOWFLAKE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: maritime-snowflake-secret
+                  key: SNOWFLAKE_PASSWORD
+                  optional: true
+
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          resources:
+            requests:
+              # CHANGE: Streamlit pages load full DataFrames — size generously
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
