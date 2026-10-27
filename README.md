@@ -5,7 +5,7 @@ An end-to-end Big Data platform for processing maritime vessel data through batc
 
 <p align="center">
   <img src="screenshots/maris-overview.png" alt="MARIS Project Overview" width="900">
-</p>
+</p> 
 
 
 
