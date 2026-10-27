@@ -3,9 +3,11 @@
 
 An end-to-end Big Data platform for processing maritime vessel data through batch and real-time pipelines, enabling vessel monitoring, traffic analytics, data quality management, and AI-assisted maritime risk analysis.
 
+
 <p align="center">
   <img src="screenshots/maris-overview.png" alt="MARIS Project Overview" width="900">
-</p> 
+</p>
+
 
 
 
